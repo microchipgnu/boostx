@@ -1,0 +1,9 @@
+{
+	"extends": "@sindresorhus/tsconfig",
+	"compilerOptions": {
+		"moduleResolution": "node16",
+		"module": "NodeNext",
+		"outDir": "dist"
+	},
+	"include": ["source", "core"]
+}
