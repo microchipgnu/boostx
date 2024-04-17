@@ -1,10 +1,11 @@
+import { DataLocationOffChain, EvmChains, OffChainSignType, SignProtocolClient, SpMode } from '@ethsign/sp-sdk';
 import { Box, Text } from 'ink';
 import SelectInput from 'ink-select-input';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
 import React, { useEffect, useState } from 'react';
 import { useInterval } from 'usehooks-ts';
-import { createPublicClient, createWalletClient, http } from 'viem';
+import { createPublicClient, createWalletClient, encodeFunctionData, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { arbitrumSepolia, baseSepolia } from 'viem/chains';
 import zod from 'zod';
@@ -21,26 +22,24 @@ type Props = {
 	options: zod.infer<typeof options>;
 };
 
+const getChain = (network: string | undefined) => {
+	switch (network) {
+		case "base-sepolia":
+			return baseSepolia;
+		case "arbitrum-sepolia":
+			return arbitrumSepolia;
+		default:
+			return undefined;
+	}
+};
 
 const CreateAndFundAccount = ({ setStep }: { setStep: (step: string) => void }) => {
 	const { getValue, setValue, configLoaded } = useConfig();
 	const [privateKey, setPrivateKey] = useState<`0x${string}` | undefined>();
 	const [balance, setBalance] = useState<bigint>(0n);
 
-	const getChain = () => {
-		const network = getValue("network") as string | undefined;
-		switch (network) {
-			case "base-sepolia":
-				return baseSepolia;
-			case "arbitrum-sepolia":
-				return arbitrumSepolia;
-			default:
-				return undefined;
-		}
-	};
-
 	const fetchBalance = async (address: `0x${string}`) => {
-		const chain = getChain();
+		const chain = getChain(getValue("network"));
 		if (!chain) return 0n;
 		const publicClient = createPublicClient({
 			chain: chain,
@@ -113,8 +112,7 @@ const CreateAndFundAccount = ({ setStep }: { setStep: (step: string) => void }) 
 	);
 };
 
-
-const MultiSelect = ({ setStep, configValue, nextStep, options }: { setStep: (step: string) => void, configValue: string, nextStep: string, options: any }) => {
+const MultiSelect = ({ setStep, configValue, nextStep, options, question }: { setStep: (step: string) => void, configValue: string, nextStep: string, options: any, question: string }) => {
 	const { setValue } = useConfig()
 
 	const handleSelect = async (item: any) => {
@@ -124,7 +122,7 @@ const MultiSelect = ({ setStep, configValue, nextStep, options }: { setStep: (st
 
 	return (
 		<Box flexDirection='column' flexBasis={"100%"}>
-			<Text>In which network do you want to deploy?</Text>
+			<Text>{question}</Text>
 			<SelectInput items={options} onSelect={handleSelect} />
 		</Box>
 	);
@@ -158,22 +156,8 @@ const ContractDeployment = ({ setStep }: { setStep: (step: string) => void }) =>
 	const [transactionReceipt, setTransactionReceipt] = useState<any>(null);
 	const { setValue, configLoaded, getValue } = useConfig()
 
-	const getChain = () => {
-		const network = getValue("network") as string | undefined;
-		switch (network) {
-			case "base-sepolia":
-				return baseSepolia;
-			case "arbitrum-sepolia":
-				return arbitrumSepolia;
-			default:
-				return undefined;
-		}
-	};
-
-
-
 	const handleDeployment = async () => {
-		const chain = getChain();
+		const chain = getChain(getValue("network"));
 		const walletClient = createWalletClient({
 			chain: chain,
 			transport: http(),
@@ -185,13 +169,13 @@ const ContractDeployment = ({ setStep }: { setStep: (step: string) => void }) =>
 			args: [
 				getValue("projectName"),
 				getValue("tokenTicker"),
-			],
+			]
 		})
 		setHash(hash);
 	}
 
 	const fetchTransactionReceipt = async () => {
-		const chain = getChain();
+		const chain = getChain(getValue("network"));
 		const publicClient = createPublicClient({
 			chain: chain,
 			transport: http(),
@@ -201,7 +185,7 @@ const ContractDeployment = ({ setStep }: { setStep: (step: string) => void }) =>
 			const txReceipt = await publicClient.waitForTransactionReceipt({ hash })
 			setTransactionReceipt(txReceipt);
 			setValue("contract-address", txReceipt.contractAddress);
-			setStep("system-deployment")
+			setStep("epoch")
 		}
 	}
 
@@ -224,6 +208,172 @@ const ContractDeployment = ({ setStep }: { setStep: (step: string) => void }) =>
 	)
 }
 
+const CreateEpochOnChainSchema = ({ setStep, nextStep }: { setStep: (step: string) => void, nextStep: string }) => {
+	const { getValue, setValue, configLoaded } = useConfig()
+
+	const createEpochSchema = async () => {
+		const network = getValue("network");
+
+		const chain = getChain(network);
+
+		const client = new SignProtocolClient(SpMode.OnChain, {
+			chain: network === "base-sepolia" ? EvmChains.baseSepolia : EvmChains.arbitrumSepolia,
+			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`)
+		});
+
+		// epoch-data should be a stringified object with {address: to_claim_amount}[]
+		const registerSchema = await client.createSchema({
+			name: "user-earnings-schema",
+			data: [{ name: "address", type: "address" }, { name: "amount", type: "uint256" }],
+		});
+
+		setValue("user-earnings-schema", `onchain_evm_${chain?.id}_${registerSchema.schemaId}`);
+		setStep(nextStep);
+	}
+
+	useEffect(() => {
+		if (!configLoaded) return
+		createEpochSchema()
+	}, [configLoaded])
+
+	return (
+		<Text>Registering earnings schema on chain...</Text>
+	)
+}
+
+const CreateOffchainBoostSchema = ({ setStep, nextStep }: { setStep: (step: string) => void, nextStep: string }) => {
+	const { getValue, setValue, configLoaded } = useConfig()
+
+	const createEpochSchema = async () => {
+		const client = new SignProtocolClient(SpMode.OffChain, {
+			signType: OffChainSignType.EvmEip712,
+			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`),
+		});
+
+		const registerBoostSchema = await client.createSchema({
+			name: "boost-schema",
+			data: [{ name: "curator-fid", type: "string" }, { name: "cast-hash", type: "string" }],
+			dataLocation: DataLocationOffChain.IPFS
+		});
+
+		// await client.createAttestation({
+		// 	schemaId: registerBoostSchema.schemaId,
+		// 	data: JSON.stringify(
+		// 		{ "boost-data": "a" }
+		// 	),
+		// 	indexingValue: 'xxx',
+		// 	dataLocation: DataLocationOnChain.IPFS,
+		// });
+
+		setValue("boost-full-schema-id", `${registerBoostSchema.schemaId}`);
+		setStep(nextStep);
+	}
+
+	useEffect(() => {
+		if (!configLoaded) return
+		createEpochSchema()
+	}, [configLoaded])
+
+	return (
+		<Text>Registering boost schema off chain...</Text>
+	)
+}
+const CreateEpochStateSchema = ({ setStep, nextStep }: { setStep: (step: string) => void, nextStep: string }) => {
+	const { getValue, setValue, configLoaded } = useConfig()
+
+	const createEpochSchema = async () => {
+		const client = new SignProtocolClient(SpMode.OffChain, {
+			signType: OffChainSignType.EvmEip712,
+			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`),
+		});
+
+		const epochStateSchema = await client.createSchema({
+			name: "epoch-state-schema",
+			data: [{ name: "computed-data-ipfs", type: "string" }, { name: "epoch", type: "string" }],
+			dataLocation: DataLocationOffChain.IPFS
+		});
+
+		await client.createAttestation({
+			schemaId: epochStateSchema.schemaId,
+			data: { "computed-data-ipfs": "a", "epoch": "a" },
+			indexingValue: 'xxx',
+		});
+
+		setValue("epoch-state-full-schema-id", `${epochStateSchema.schemaId}`);
+		setStep(nextStep);
+	}
+
+	useEffect(() => {
+		if (!configLoaded) return
+		createEpochSchema()
+	}, [configLoaded])
+
+	return (
+		<Text>Creating epoch schema on chain...</Text>
+	)
+}
+
+const SetupContractSPInstanceAndSchema = ({ setStep, nextStep }: { setStep: (step: string) => void, nextStep: string }) => {
+	const { getValue, configLoaded } = useConfig()
+
+	const configure = async () => {
+
+		const network = getValue("network");
+		const schemaId = getValue("user-earnings-schema");
+		const address = getValue("address");
+
+		const chain = getChain(network);
+
+		const walletClient = createWalletClient({
+			chain,
+			transport: http(),
+			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`),
+		})
+
+		const publicClient = createPublicClient({
+			chain: chain,
+			transport: http(),
+		})
+
+		const spInstance = network === "base-sepolia" ? "0x4e4af2a21ebf62850fD99Eb6253E1eFBb56098cD" : "0x4e4af2a21ebf62850fD99Eb6253E1eFBb56098cD";
+
+		const currentNonce = await publicClient.getTransactionCount({ address: address, blockTag: "latest" });
+
+		await walletClient.sendTransaction({
+			data: encodeFunctionData({
+				abi: abi,
+				functionName: 'setSPInstance',
+				args: [spInstance]
+			}),
+			to: getValue("contract-address"),
+			nonce: currentNonce
+		})
+
+		const onChainSchemaId = schemaId.split("_")[schemaId.split("_").length - 1];
+
+		await walletClient.sendTransaction({
+			data: encodeFunctionData({
+				abi: abi,
+				functionName: 'setSchemaID',
+				args: [onChainSchemaId]
+			}),
+			to: getValue("contract-address"),
+			nonce: currentNonce + 1
+		})
+
+
+		setStep(nextStep);
+	}
+
+	useEffect(() => {
+		if (!configLoaded) return
+		configure()
+	}, [configLoaded])
+
+	return (
+		<Text>Finalizing contract details...</Text>
+	)
+}
 
 export default function New({ options }: Props) {
 	const { config } = useConfig()
@@ -264,7 +414,7 @@ export default function New({ options }: Props) {
 	}
 	if (step === "select-network") {
 		return (
-			<MultiSelect setStep={setStep} options={[
+			<MultiSelect setStep={setStep} question='Select network:' options={[
 				{
 					label: 'Base Sepolia',
 					value: 'base-sepolia'
@@ -316,10 +466,58 @@ export default function New({ options }: Props) {
 		);
 	}
 
+
 	if (step === "contract-deployment") {
 		return (
 			<ContractDeployment setStep={setStep} />
 		)
+	}
+
+	if (step === "epoch") {
+		return (
+			<MultiSelect setStep={setStep} question='What is your desired epoch in hours (12h, 24h, etc)?' options={[
+				{
+					label: '30min',
+					value: '*/30 * * * *'
+				},
+				{
+					label: '1h',
+					value: '0 * * * *'
+				},
+				{
+					label: '5h',
+					value: '0 */5 * * *'
+				},
+				{
+					label: '12h',
+					value: '0 */12 * * *'
+				},
+				{
+					label: '1d',
+					value: '0 0 * * *'
+				},
+				{
+					label: '1w',
+					value: '0 0 * * 0'
+				},
+			]} configValue="epoch" nextStep="create-epoch-schema"></MultiSelect>
+		);
+	}
+
+	if (step === "create-epoch-schema") {
+		return (
+			<CreateEpochOnChainSchema setStep={setStep} nextStep="create-boost-schema" />
+		);
+	}
+	if (step === "create-boost-schema") {
+		return (
+			<CreateOffchainBoostSchema setStep={setStep} nextStep="create-epoch-state-schema" />
+		);
+	}
+	if (step === "create-epoch-state-schema") {
+		return (
+			<CreateEpochStateSchema setStep={setStep} nextStep="airstack-api-key" />
+		);
 	}
 
 	if (step === "airstack-api-key") {
@@ -327,9 +525,24 @@ export default function New({ options }: Props) {
 			<Question
 				question="Get your Airstack API Key (https://airstack.xyz/) and drop it here:"
 				configValue="airstackApiKey"
-				nextStep="system-deployment"
+				nextStep="lighthouse-storage-api-key"
 				setStep={setStep}
 			/>
+		);
+	}
+	if (step === "lighthouse-storage-api-key") {
+		return (
+			<Question
+				question="Get your Lighthouse Storage API Key (https://files.lighthouse.storage/dashboard/apikey) and drop it here:"
+				configValue="lighthouseStorageApiKey"
+				nextStep="setup-contract-sp-instance-and-schema"
+				setStep={setStep}
+			/>
+		);
+	}
+	if (step === "setup-contract-sp-instance-and-schema") {
+		return (
+			<SetupContractSPInstanceAndSchema setStep={setStep} nextStep="system-deployment" />
 		);
 	}
 

@@ -17,7 +17,10 @@
 		"dist"
 	],
 	"dependencies": {
+		"@ethsign/sp-sdk": "^0.3.29",
 		"ink": "^4.1.0",
+		"ink-big-text": "^2.0.0",
+		"ink-gradient": "^3.0.0",
 		"ink-select-input": "^5.0.0",
 		"ink-spinner": "^5.0.0",
 		"ink-text-input": "^5.0.1",
