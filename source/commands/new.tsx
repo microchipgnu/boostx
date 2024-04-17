@@ -39,7 +39,7 @@ const CreateAndFundAccount = ({ setStep }: { setStep: (step: string) => void }) 
 	const [balance, setBalance] = useState<bigint>(0n);
 
 	const fetchBalance = async (address: `0x${string}`) => {
-		const chain = getChain(getValue("network"));
+		const chain = getChain(getValue("NETWORK"));
 		if (!chain) return 0n;
 		const publicClient = createPublicClient({
 			chain: chain,
@@ -55,10 +55,10 @@ const CreateAndFundAccount = ({ setStep }: { setStep: (step: string) => void }) 
 	};
 
 	const initializeAccount = async () => {
-		let _privateKey = getValue("privateKey") as `0x${string}` | undefined;
+		let _privateKey = getValue("PRIVATE_KEY") as `0x${string}` | undefined;
 		if (!_privateKey) {
 			_privateKey = generatePrivateKey();
-			setValue("privateKey", _privateKey);
+			setValue("PRIVATE_KEY", _privateKey);
 		}
 
 		setPrivateKey(_privateKey);
@@ -74,7 +74,7 @@ const CreateAndFundAccount = ({ setStep }: { setStep: (step: string) => void }) 
 
 	useEffect(() => {
 		if (balance > 0n) {
-			setValue("address", privateKeyToAccount(privateKey!).address);
+			setValue("ADDRESS", privateKeyToAccount(privateKey!).address);
 			setStep("project-name");
 		}
 	}, [balance]);
@@ -157,25 +157,25 @@ const ContractDeployment = ({ setStep }: { setStep: (step: string) => void }) =>
 	const { setValue, configLoaded, getValue } = useConfig()
 
 	const handleDeployment = async () => {
-		const chain = getChain(getValue("network"));
+		const chain = getChain(getValue("NETWORK"));
 		const walletClient = createWalletClient({
 			chain: chain,
 			transport: http(),
-			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`),
+			account: privateKeyToAccount(getValue("PRIVATE_KEY") as `0x${string}`),
 		});
 		const hash = await walletClient.deployContract({
 			abi: abi,
 			bytecode: bytecode,
 			args: [
-				getValue("projectName"),
-				getValue("tokenTicker"),
+				getValue("PROJECT_NAME"),
+				getValue("SYMBOL"),
 			]
 		})
 		setHash(hash);
 	}
 
 	const fetchTransactionReceipt = async () => {
-		const chain = getChain(getValue("network"));
+		const chain = getChain(getValue("NETWORK"));
 		const publicClient = createPublicClient({
 			chain: chain,
 			transport: http(),
@@ -184,7 +184,7 @@ const ContractDeployment = ({ setStep }: { setStep: (step: string) => void }) =>
 		if (hash) {
 			const txReceipt = await publicClient.waitForTransactionReceipt({ hash })
 			setTransactionReceipt(txReceipt);
-			setValue("contract-address", txReceipt.contractAddress);
+			setValue("CONTRACT_ADDRESS", txReceipt.contractAddress);
 			setStep("epoch")
 		}
 	}
@@ -212,13 +212,13 @@ const CreateEpochOnChainSchema = ({ setStep, nextStep }: { setStep: (step: strin
 	const { getValue, setValue, configLoaded } = useConfig()
 
 	const createEpochSchema = async () => {
-		const network = getValue("network");
+		const network = getValue("NETWORK");
 
 		const chain = getChain(network);
 
 		const client = new SignProtocolClient(SpMode.OnChain, {
 			chain: network === "base-sepolia" ? EvmChains.baseSepolia : EvmChains.arbitrumSepolia,
-			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`)
+			account: privateKeyToAccount(getValue("PRIVATE_KEY") as `0x${string}`)
 		});
 
 		// epoch-data should be a stringified object with {address: to_claim_amount}[]
@@ -227,7 +227,7 @@ const CreateEpochOnChainSchema = ({ setStep, nextStep }: { setStep: (step: strin
 			data: [{ name: "address", type: "address" }, { name: "amount", type: "uint256" }],
 		});
 
-		setValue("user-earnings-schema", `onchain_evm_${chain?.id}_${registerSchema.schemaId}`);
+		setValue("USER_EARNINGS_SCHEMA", `onchain_evm_${chain?.id}_${registerSchema.schemaId}`);
 		setStep(nextStep);
 	}
 
@@ -247,7 +247,7 @@ const CreateOffchainBoostSchema = ({ setStep, nextStep }: { setStep: (step: stri
 	const createEpochSchema = async () => {
 		const client = new SignProtocolClient(SpMode.OffChain, {
 			signType: OffChainSignType.EvmEip712,
-			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`),
+			account: privateKeyToAccount(getValue("PRIVATE_KEY") as `0x${string}`),
 		});
 
 		const registerBoostSchema = await client.createSchema({
@@ -265,7 +265,7 @@ const CreateOffchainBoostSchema = ({ setStep, nextStep }: { setStep: (step: stri
 		// 	dataLocation: DataLocationOnChain.IPFS,
 		// });
 
-		setValue("boost-full-schema-id", `${registerBoostSchema.schemaId}`);
+		setValue("BOOST_FULL_SCHEMA_ID", `${registerBoostSchema.schemaId}`);
 		setStep(nextStep);
 	}
 
@@ -284,7 +284,7 @@ const CreateEpochStateSchema = ({ setStep, nextStep }: { setStep: (step: string)
 	const createEpochSchema = async () => {
 		const client = new SignProtocolClient(SpMode.OffChain, {
 			signType: OffChainSignType.EvmEip712,
-			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`),
+			account: privateKeyToAccount(getValue("PRIVATE_KEY") as `0x${string}`),
 		});
 
 		const epochStateSchema = await client.createSchema({
@@ -299,7 +299,7 @@ const CreateEpochStateSchema = ({ setStep, nextStep }: { setStep: (step: string)
 			indexingValue: 'xxx',
 		});
 
-		setValue("epoch-state-full-schema-id", `${epochStateSchema.schemaId}`);
+		setValue("EPOCH_STATE_FULL_SCHEMA_ID", `${epochStateSchema.schemaId}`);
 		setStep(nextStep);
 	}
 
@@ -318,16 +318,16 @@ const SetupContractSPInstanceAndSchema = ({ setStep, nextStep }: { setStep: (ste
 
 	const configure = async () => {
 
-		const network = getValue("network");
-		const schemaId = getValue("user-earnings-schema");
-		const address = getValue("address");
+		const network = getValue("NETWORK");
+		const schemaId = getValue("USER_EARNINGS_SCHEMA");
+		const address = getValue("ADDRESS");
 
 		const chain = getChain(network);
 
 		const walletClient = createWalletClient({
 			chain,
 			transport: http(),
-			account: privateKeyToAccount(getValue("privateKey") as `0x${string}`),
+			account: privateKeyToAccount(getValue("PRIVATE_KEY") as `0x${string}`),
 		})
 
 		const publicClient = createPublicClient({
@@ -345,7 +345,7 @@ const SetupContractSPInstanceAndSchema = ({ setStep, nextStep }: { setStep: (ste
 				functionName: 'setSPInstance',
 				args: [spInstance]
 			}),
-			to: getValue("contract-address"),
+			to: getValue("CONTRACT_ADDRESS"),
 			nonce: currentNonce
 		})
 
@@ -357,7 +357,7 @@ const SetupContractSPInstanceAndSchema = ({ setStep, nextStep }: { setStep: (ste
 				functionName: 'setSchemaID',
 				args: [onChainSchemaId]
 			}),
-			to: getValue("contract-address"),
+			to: getValue("CONTRACT_ADDRESS"),
 			nonce: currentNonce + 1
 		})
 
@@ -386,7 +386,7 @@ export default function New({ options }: Props) {
 		}
 
 		if (config) {
-			if (config["network"]) {
+			if (config["NETWORK"]) {
 				setStep("create-account")
 				return
 			}
@@ -423,7 +423,7 @@ export default function New({ options }: Props) {
 					label: 'Arbitrum Sepolia',
 					value: 'arbitrum-sepolia'
 				},
-			]} configValue="network" nextStep="create-account"></MultiSelect>
+			]} configValue="NETWORK" nextStep="create-account"></MultiSelect>
 		);
 	}
 
@@ -437,7 +437,7 @@ export default function New({ options }: Props) {
 		return (
 			<Question
 				question="What is the name of your project?"
-				configValue="projectName"
+				configValue="PROJECT_NAME"
 				nextStep="project-description"
 				setStep={setStep}
 			/>
@@ -448,7 +448,7 @@ export default function New({ options }: Props) {
 		return (
 			<Question
 				question="What is the description of your project?"
-				configValue="projectDescription"
+				configValue="PROJECT_DESCRIPTION"
 				nextStep="token-ticker"
 				setStep={setStep}
 			/>
@@ -459,7 +459,7 @@ export default function New({ options }: Props) {
 		return (
 			<Question
 				question="What is the ticker for your token (for example, DEGEN)?"
-				configValue="tokenTicker"
+				configValue="SYMBOL"
 				nextStep="contract-deployment"
 				setStep={setStep}
 			/>
@@ -500,7 +500,7 @@ export default function New({ options }: Props) {
 					label: '1w',
 					value: '0 0 * * 0'
 				},
-			]} configValue="epoch" nextStep="create-epoch-schema"></MultiSelect>
+			]} configValue="EPOCH_CRONJOB" nextStep="create-epoch-schema"></MultiSelect>
 		);
 	}
 
@@ -524,7 +524,7 @@ export default function New({ options }: Props) {
 		return (
 			<Question
 				question="Get your Airstack API Key (https://airstack.xyz/) and drop it here:"
-				configValue="airstackApiKey"
+				configValue="AIRSTACK_API_KEY"
 				nextStep="lighthouse-storage-api-key"
 				setStep={setStep}
 			/>
@@ -534,7 +534,7 @@ export default function New({ options }: Props) {
 		return (
 			<Question
 				question="Get your Lighthouse Storage API Key (https://files.lighthouse.storage/dashboard/apikey) and drop it here:"
-				configValue="lighthouseStorageApiKey"
+				configValue="LIGHTHOUSE_STORAGE_API_KEY"
 				nextStep="setup-contract-sp-instance-and-schema"
 				setStep={setStep}
 			/>
@@ -546,11 +546,13 @@ export default function New({ options }: Props) {
 		);
 	}
 
+
 	if (step === "system-deployment") {
 		return (
 			<Text>System Deployment</Text>
 		)
 	}
+
 
 	return (
 		<Text>Done! {options.name}</Text>
