@@ -1,26 +1,22 @@
 import { DataLocationOffChain, EvmChains, OffChainSignType, SignProtocolClient, SpMode } from '@ethsign/sp-sdk';
+import lighthouse from '@lighthouse-web3/sdk';
+import axios from 'axios';
+import { ethers } from 'ethers';
+import { promises as fs } from 'fs';
 import { Box, Text } from 'ink';
 import SelectInput from 'ink-select-input';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
+import path from 'path';
 import React, { useEffect, useState } from 'react';
 import { useInterval } from 'usehooks-ts';
 import { createPublicClient, createWalletClient, encodeFunctionData, http } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { arbitrumSepolia, baseSepolia } from 'viem/chains';
-import zod from 'zod';
+import { arbitrumSepolia, baseSepolia, gnosisChiado } from 'viem/chains';
 import { abi, bytecode } from '../../core/contracts/basic-erc-20/basic.js';
 import { useConfig } from '../../core/hooks/use-config.js';
 
 export const alias = "n"
-
-export const options = zod.object({
-	name: zod.string().default('your-project-name').describe('Name'),
-});
-
-type Props = {
-	options: zod.infer<typeof options>;
-};
 
 const getChain = (network: string | undefined) => {
 	switch (network) {
@@ -28,10 +24,25 @@ const getChain = (network: string | undefined) => {
 			return baseSepolia;
 		case "arbitrum-sepolia":
 			return arbitrumSepolia;
+		case "gnosis-chiado":
+			return gnosisChiado;
 		default:
 			return undefined;
 	}
 };
+
+const getSignChain = (network: string | undefined) => {
+	switch (network) {
+		case "base-sepolia":
+			return EvmChains.baseSepolia;
+		case "arbitrum-sepolia":
+			return EvmChains.arbitrumSepolia;
+		case "gnosis-chiado":
+			return EvmChains.gnosisChiado;
+		default:
+			return undefined;
+	}
+}
 
 const CreateAndFundAccount = ({ setStep }: { setStep: (step: string) => void }) => {
 	const { getValue, setValue, configLoaded } = useConfig();
@@ -112,12 +123,13 @@ const CreateAndFundAccount = ({ setStep }: { setStep: (step: string) => void }) 
 	);
 };
 
-const MultiSelect = ({ setStep, configValue, nextStep, options, question }: { setStep: (step: string) => void, configValue: string, nextStep: string, options: any, question: string }) => {
+const MultiSelect = ({ setStep, configValue, nextStep, options, question, onFinished }: { setStep: (step: string) => void, configValue: string, nextStep: string, options: any, question: string, onFinished?: (value: string) => void }) => {
 	const { setValue } = useConfig()
 
 	const handleSelect = async (item: any) => {
 		await setValue(configValue, item.value)
 		setStep(nextStep);
+		onFinished && onFinished(item.value);
 	};
 
 	return (
@@ -128,7 +140,7 @@ const MultiSelect = ({ setStep, configValue, nextStep, options, question }: { se
 	);
 }
 
-const Question = ({ question, configValue, nextStep, setStep }: { question: string, configValue: string, nextStep: string, setStep: (step: string) => void }) => {
+const Question = ({ question, configValue, nextStep, setStep, onFinished }: { question: string, configValue: string, nextStep: string, setStep: (step: string) => void, onFinished?: () => void }) => {
 	const [query, setQuery] = useState('');
 	const { setValue } = useConfig()
 
@@ -137,6 +149,7 @@ const Question = ({ question, configValue, nextStep, setStep }: { question: stri
 		setValue(configValue, value)
 		setStep(nextStep);
 		setQuery('');
+		onFinished && onFinished();
 	}
 
 	return (
@@ -214,10 +227,13 @@ const CreateEpochOnChainSchema = ({ setStep, nextStep }: { setStep: (step: strin
 	const createEpochSchema = async () => {
 		const network = getValue("NETWORK");
 
+		const signChain = getSignChain(network);
 		const chain = getChain(network);
 
+		if (!signChain) return
+
 		const client = new SignProtocolClient(SpMode.OnChain, {
-			chain: network === "base-sepolia" ? EvmChains.baseSepolia : EvmChains.arbitrumSepolia,
+			chain: signChain,
 			account: privateKeyToAccount(getValue("PRIVATE_KEY") as `0x${string}`)
 		});
 
@@ -278,6 +294,7 @@ const CreateOffchainBoostSchema = ({ setStep, nextStep }: { setStep: (step: stri
 		<Text>Registering boost schema off chain...</Text>
 	)
 }
+
 const CreateEpochStateSchema = ({ setStep, nextStep }: { setStep: (step: string) => void, nextStep: string }) => {
 	const { getValue, setValue, configLoaded } = useConfig()
 
@@ -289,14 +306,8 @@ const CreateEpochStateSchema = ({ setStep, nextStep }: { setStep: (step: string)
 
 		const epochStateSchema = await client.createSchema({
 			name: "epoch-state-schema",
-			data: [{ name: "computed-data-ipfs", type: "string" }, { name: "epoch", type: "string" }],
+			data: [{ name: "computed-data", type: "string" }, { name: "ipfs-hash", type: "string" }, { name: "ipfs-url", type: "string" }, { name: "epoch", type: "string" }],
 			dataLocation: DataLocationOffChain.IPFS
-		});
-
-		await client.createAttestation({
-			schemaId: epochStateSchema.schemaId,
-			data: { "computed-data-ipfs": "a", "epoch": "a" },
-			indexingValue: 'xxx',
 		});
 
 		setValue("EPOCH_STATE_FULL_SCHEMA_ID", `${epochStateSchema.schemaId}`);
@@ -374,8 +385,54 @@ const SetupContractSPInstanceAndSchema = ({ setStep, nextStep }: { setStep: (ste
 		<Text>Finalizing contract details...</Text>
 	)
 }
+const GetLighthouseApiKey = ({ setStep, nextStep }: { setStep: (step: string) => void, nextStep: string }) => {
+	const { getValue, setValue, configLoaded } = useConfig()
 
-export default function New({ options }: Props) {
+
+	const getApiKey = async (address: `0x${string}`, privateKey: `0x${string}`) => {
+
+		const signAuthMessage = async (privateKey: string | ethers.SigningKey, verificationMessage: string | Uint8Array) => {
+			const signer = new ethers.Wallet(privateKey)
+			const signedMessage = await signer.signMessage(verificationMessage)
+			return (signedMessage)
+		}
+
+		const wallet = {
+			publicKey: address,
+			privateKey: privateKey,
+		}
+		const verificationMessage = (
+			await axios.get(
+				`https://api.lighthouse.storage/api/auth/get_message?publicKey=${wallet.publicKey}`
+			)
+		).data
+		const signedMessage = await signAuthMessage(wallet.privateKey, verificationMessage)
+		const response = await lighthouse.getApiKey(wallet.publicKey, signedMessage)
+
+		return response.data.apiKey
+	}
+
+	const configure = async () => {
+		const address = getValue("ADDRESS");
+		const privateKey = getValue("PRIVATE_KEY");
+
+		const apiKey = await getApiKey(address, privateKey as `0x${string}`);
+
+		setValue("LIGHTHOUSE_STORAGE_API_KEY", apiKey)
+		setStep(nextStep);
+	}
+
+	useEffect(() => {
+		if (!configLoaded) return
+		configure()
+	}, [configLoaded])
+
+	return (
+		<Text>Getting your Lighthouse Storage API Key...</Text>
+	)
+}
+
+export default function New() {
 	const { config } = useConfig()
 	const [step, setStep] = useState("loading")
 
@@ -412,6 +469,7 @@ export default function New({ options }: Props) {
 			</Text>
 		);
 	}
+
 	if (step === "select-network") {
 		return (
 			<MultiSelect setStep={setStep} question='Select network:' options={[
@@ -422,6 +480,10 @@ export default function New({ options }: Props) {
 				{
 					label: 'Arbitrum Sepolia',
 					value: 'arbitrum-sepolia'
+				},
+				{
+					label: 'Gnosis Chiado',
+					value: 'gnosis-chiado'
 				},
 			]} configValue="NETWORK" nextStep="create-account"></MultiSelect>
 		);
@@ -460,12 +522,45 @@ export default function New({ options }: Props) {
 			<Question
 				question="What is the ticker for your token (for example, DEGEN)?"
 				configValue="SYMBOL"
-				nextStep="contract-deployment"
+				nextStep="select-rules"
 				setStep={setStep}
 			/>
 		);
 	}
 
+	if (step === "select-rules") {
+		return (
+			<MultiSelect setStep={setStep} question='Choose rule system:' options={[
+				{
+					label: 'Basic',
+					value: 'basic'
+				},
+				{
+					label: 'Rewards for POAP holders',
+					value: 'only-poap-holders'
+				},
+				{
+					label: '$DEGEN holders',
+					value: 'degen-holders'
+				},
+			]} configValue="RULES" nextStep="token-supply"></MultiSelect>
+		);
+	}
+
+	if (step === "token-supply") {
+		return (
+			<MultiSelect setStep={setStep} question='Choose token supply:' options={[
+				{
+					label: 'Linear',
+					value: 'linear'
+				},
+				{
+					label: 'Quadratic',
+					value: 'quadratic'
+				},
+			]} configValue="TOKEN_SUPPLY" nextStep="contract-deployment"></MultiSelect>
+		);
+	}
 
 	if (step === "contract-deployment") {
 		return (
@@ -500,7 +595,18 @@ export default function New({ options }: Props) {
 					label: '1w',
 					value: '0 0 * * 0'
 				},
-			]} configValue="EPOCH_CRONJOB" nextStep="create-epoch-schema"></MultiSelect>
+			]} configValue="EPOCH_CRONJOB" nextStep="create-epoch-schema" onFinished={async (value: string) => {
+				const absolutePath = path.resolve("vercel.json");
+				await fs.writeFile(absolutePath, JSON.stringify({
+					"crons": [
+						{
+							"path": "/epoch",
+							"schedule": value
+						}
+					]
+				}
+				));
+			}}></MultiSelect>
 		);
 	}
 
@@ -532,9 +638,7 @@ export default function New({ options }: Props) {
 	}
 	if (step === "lighthouse-storage-api-key") {
 		return (
-			<Question
-				question="Get your Lighthouse Storage API Key (https://files.lighthouse.storage/dashboard/apikey) and drop it here:"
-				configValue="LIGHTHOUSE_STORAGE_API_KEY"
+			<GetLighthouseApiKey
 				nextStep="setup-contract-sp-instance-and-schema"
 				setStep={setStep}
 			/>
@@ -549,12 +653,11 @@ export default function New({ options }: Props) {
 
 	if (step === "system-deployment") {
 		return (
-			<Text>System Deployment</Text>
+			<Text>Ready to deploy!</Text>
 		)
 	}
 
-
 	return (
-		<Text>Done! {options.name}</Text>
-	);
+		<Text>Ready to deploy!</Text>
+	)
 }

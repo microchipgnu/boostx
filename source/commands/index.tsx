@@ -11,8 +11,7 @@ export default function Index() {
 			<Gradient name="retro">
 				<BigText text="$BOOSTX" />
 			</Gradient>
-			<Text bold>Welcome to the BOOST CLI!</Text>
-			<Text>You can deploy your BOOST system using this tool.</Text>
+			<Text>Run `boostx new` to get started.</Text>
 		</Box>
 	);
 }
